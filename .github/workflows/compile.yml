@@ -1,0 +1,116 @@
+name: Compile LaTeX and Publish
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile LaTeX files
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/workdir -w /workdir ghcr.io/xu-cheng/texlive-full:latest bash -c '
+            mkdir -p pdf_out
+            export TEXINPUTS=".:/workdir/common//:"
+
+            find grade-10 grade-11 -name "main.tex" | while read -r texfile; do
+              dir=$(dirname "$texfile")
+              grade=$(echo "$dir" | cut -d"/" -f1)
+              topic=$(echo "$dir" | cut -d"/" -f2)
+              
+              echo "=== Сборка: $texfile ==="
+              cd "$dir"
+              latexmk -pdf -interaction=nonstopmode main.tex
+              cp main.pdf "/workdir/pdf_out/${grade}_${topic}.pdf"
+              cd /workdir
+            done
+          '
+
+      - name: Update README.md with table of contents
+        run: |
+          python3 - << 'EOF'
+          import os, re
+
+          REPO = os.environ.get("GITHUB_REPOSITORY", "user/repo")
+          BASE_URL = f"https://github.com/{REPO}/releases/download/latest"
+
+          def extract_title(tex_path):
+              if not os.path.exists(tex_path):
+                  return "Без названия"
+              with open(tex_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+              
+              m = re.search(r'\\title\{([^}]+)\}', content)
+              if m:
+                  return m.group(1).replace('\\\\', ' ').strip()
+              
+              m = re.search(r'\\textbf\{([^}]+)\}', content)
+              if m:
+                  clean = re.sub(r'\\[a-zA-Z]+', '', m.group(1))
+                  return clean.replace('{', '').replace('}', '').strip()
+
+              return os.path.basename(os.path.dirname(tex_path))
+
+          def generate_table(grade_folder):
+              if not os.path.exists(grade_folder):
+                  return "_Материалы пока не добавлены._\n"
+              
+              topics = sorted([d for d in os.listdir(grade_folder) if os.path.isdir(os.path.join(grade_folder, d))])
+              if not topics:
+                  return "_Материалы пока не добавлены._\n"
+
+              table = "| № | Тема урока | Конспект |\n|---|---|:---:|\n"
+              for i, topic in enumerate(topics, 1):
+                  tex_file = os.path.join(grade_folder, topic, "main.tex")
+                  title = extract_title(tex_file)
+                  pdf_name = f"{grade_folder}_{topic}.pdf"
+                  pdf_link = f"{BASE_URL}/{pdf_name}"
+                  table += f"| {i:02d} | {title} | [Скачать PDF]({pdf_link}) |\n"
+              return table + "\n"
+
+          with open("README.md", "r", encoding="utf-8") as f:
+              readme = f.read()
+
+          t10 = generate_table("grade-10")
+          readme = re.sub(r'(<!-- GRADE_10_START -->).*?(<!-- GRADE_10_END -->)', 
+                          f'\\1\n\n{t10}\n\\2', readme, flags=re.DOTALL)
+
+          t11 = generate_table("grade-11")
+          readme = re.sub(r'(<!-- GRADE_11_START -->).*?(<!-- GRADE_11_END -->)', 
+                          f'\\1\n\n{t11}\n\\2', readme, flags=re.DOTALL)
+
+          with open("README.md", "w", encoding="utf-8") as f:
+              f.write(readme)
+          print("README.md успешно обновлен!")
+          EOF
+
+      - name: Commit and push changes to README.md
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "README.md не изменился, коммит не требуется."
+          else
+            git commit -m "docs: автоматическое обновление ссылок на конспекты в README [skip ci]"
+            git push
+          fi
+
+      - name: Publish PDFs to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Актуальные конспекты уроков (PDF)"
+          body: "Автоматическая сборка всех конспектов."
+          files: pdf_out/*.pdf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
