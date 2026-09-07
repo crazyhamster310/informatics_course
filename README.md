@@ -3,7 +3,10 @@
 ## 10 класс
 <!-- GRADE_10_START -->
 
-_Материалы пока не добавлены._
+| № | Тема урока | Конспект |
+|---|---|:---:|
+| 01 | Принципы устройства компьютеров | [Скачать PDF](https://github.com/crazyhamster310/informatics_course/releases/download/latest/grade-10_topic-01.pdf) |
+
 
 <!-- GRADE_10_END -->
 
